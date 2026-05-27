@@ -6,15 +6,16 @@ local Players           = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local GD = require(ReplicatedStorage.Shared.GameData)
 
-local dataStore    = DataStoreService:GetDataStore("PlayerData_v9")
-local oldDataStore = DataStoreService:GetDataStore("PlayerData_v8")
+local data_store     = DataStoreService:GetDataStore("PlayerData_v9")
+local old_data_store = DataStoreService:GetDataStore("PlayerData_v8")
 
 local AUTOSAVE_INTERVAL = 120
-local sessionData       = {}
-local sessionStartTimes = {}
+local session_data      = {}
+local session_start_times = {}
 
 -- price and passive income for every character.
 -- keeping this in one place makes rebalancing easier.
+
 local ECONOMY_V3 = {
 	["Yoo Jin-Ho"]    = {Price=30,        PassiveIncome=0.2},
 	["Go Gun-Hee"]    = {Price=150,       PassiveIncome=0.6},
@@ -107,20 +108,20 @@ local ECONOMY_V3 = {
 	["Blackbeard"]                 = {Price=80000000000,   PassiveIncome=10000000},
 }
 
--- updates price and income on a saved character to match the current economy table.
+-- updates price and income on a saved character to match current economy table.
 -- needed when a players save was created before a balance change.
-local function migrateCharData(charData)
-	if not charData or not charData.CharacterName then return charData end
-	local v3 = ECONOMY_V3[charData.CharacterName]
+
+local function migrate_char_data(cd)
+	if not cd or not cd.CharacterName then return cd end
+	local v3 = ECONOMY_V3[cd.CharacterName]
 	if v3 then
-		charData.Price         = v3.Price
-		charData.PassiveIncome = v3.PassiveIncome
+		cd.Price         = v3.Price
+		cd.PassiveIncome = v3.PassiveIncome
 	end
-	if not charData.Stars then charData.Stars = 1 end
-	return charData
+	if not cd.Stars then cd.Stars = 1 end
+	return cd
 end
 
--- shortcuts to shared game constants
 local formatNumber        = GD.formatNumber
 local RARITY_COLORS       = GD.RARITY_COLORS
 local RARITY_DISPLAY      = GD.RARITY_DISPLAY
@@ -128,28 +129,24 @@ local SLOTS_PER_REBIRTH   = GD.SLOTS_PER_REBIRTH
 local STORAGE_PER_REBIRTH = GD.STORAGE_PER_REBIRTH
 local ANIME_BASE_COLORS   = GD.ANIME_BASE_COLORS
 
-local function getCashMultiplier(rebirthLevel)
-	return GD.getCashMultiplier(rebirthLevel)
-end
-
-local function getStarMultiplier(stars)
-	return GD.getStarMultiplier(stars)
-end
+local function get_cash_multiplier(level) return GD.getCashMultiplier(level) end
+local function get_star_multiplier(stars) return GD.getStarMultiplier(stars) end
 
 local INDEX_ANIME_NAMES = {
 	"Solo Leveling", "Black Clover", "Hunter x Hunter", "Bleach",
 	"My Hero Academia", "Attack on Titan", "Dragon Ball", "Naruto", "One Piece",
 }
 
+-- player helpers
 
-local function getPlayerBasePlateau(player)
-	local playerNumber  = player:GetAttribute("SpawnerNumber") or 1
-	local spawnerFolder = workspace:FindFirstChild("SpawnerPlayer" .. playerNumber)
-	if not spawnerFolder then return nil end
-	return spawnerFolder:FindFirstChild("BasePlateau" .. playerNumber)
+local function get_base_plateau(player)
+	local pn     = player:GetAttribute("SpawnerNumber") or 1
+	local folder = workspace:FindFirstChild("SpawnerPlayer" .. pn)
+	if not folder then return nil end
+	return folder:FindFirstChild("BasePlateau" .. pn)
 end
 
-local function ensureDiscoveredFolder(player)
+local function ensure_discovered(player)
 	local folder = player:FindFirstChild("DiscoveredCharacters")
 	if not folder then
 		folder        = Instance.new("Folder")
@@ -159,65 +156,63 @@ local function ensureDiscoveredFolder(player)
 	return folder
 end
 
-local function ensureInventory(player)
-	local inventory = player:FindFirstChild("Inventory")
-	if not inventory then
-		inventory        = Instance.new("Folder")
-		inventory.Name   = "Inventory"
-		inventory.Parent = player
+local function ensure_inventory(player)
+	local inv = player:FindFirstChild("Inventory")
+	if not inv then
+		inv        = Instance.new("Folder")
+		inv.Name   = "Inventory"
+		inv.Parent = player
 	end
-
-	local storage = inventory:FindFirstChild("Storage")
-	if not storage then
-		storage        = Instance.new("Folder")
-		storage.Name   = "Storage"
-		storage.Parent = inventory
+	local stor = inv:FindFirstChild("Storage")
+	if not stor then
+		stor        = Instance.new("Folder")
+		stor.Name   = "Storage"
+		stor.Parent = inv
 	end
-
-	local invCount = inventory:FindFirstChild("InventoryCount")
-	if not invCount then
-		invCount        = Instance.new("IntValue")
-		invCount.Name   = "InventoryCount"
-		invCount.Value  = 0
-		invCount.Parent = inventory
+	local ic = inv:FindFirstChild("InventoryCount")
+	if not ic then
+		ic        = Instance.new("IntValue")
+		ic.Name   = "InventoryCount"
+		ic.Value  = 0
+		ic.Parent = inv
 	end
-
-	return inventory, storage, invCount
+	return inv, stor, ic
 end
 
-local function discoverCharacter(player, charName)
-	if not charName or charName == "" then return end
-	local folder = ensureDiscoveredFolder(player)
-	if not folder:FindFirstChild(charName) then
+local function discover_character(player, char_name)
+	if not char_name or char_name == "" then return end
+	local folder = ensure_discovered(player)
+	if not folder:FindFirstChild(char_name) then
 		local tag     = Instance.new("BoolValue")
-		tag.Name      = charName
+		tag.Name      = char_name
 		tag.Value     = true
 		tag.Parent    = folder
 	end
 end
 
+-- session time helpers
 
-local function getSessionMinutes(player)
-	local startTime = sessionStartTimes[player.UserId]
-	if not startTime then return 0 end
-	return math.floor((os.time() - startTime) / 60)
+local function get_session_minutes(player)
+	local start = session_start_times[player.UserId]
+	if not start then return 0 end
+	return math.floor((os.time() - start) / 60)
 end
 
-local function getTotalTimePlayed(player)
-	local saved = player:GetAttribute("TimePlayedMinutes") or 0
-	return saved + getSessionMinutes(player)
+local function get_total_time_played(player)
+	return (player:GetAttribute("TimePlayedMinutes") or 0) + get_session_minutes(player)
 end
 
-local function formatTimePlayed(totalMinutes)
-	if totalMinutes < 60 then return totalMinutes .. " min" end
-	local hours = math.floor(totalMinutes / 60)
-	local mins  = totalMinutes % 60
-	if mins == 0 then return hours .. "h" end
-	return hours .. "h " .. mins .. "m"
+local function format_time_played(mins)
+	if mins < 60 then return mins .. " min" end
+	local h = math.floor(mins / 60)
+	local m = mins % 60
+	if m == 0 then return h .. "h" end
+	return h .. "h " .. m .. "m"
 end
 
+-- character serialization
 
-local function serializeCharacter(char)
+local function serialize_character(char)
 	local data = {
 		CharacterName = char:GetAttribute("CharacterName") or "Unknown",
 		Rarity        = char:GetAttribute("Rarity")        or "Common",
@@ -233,7 +228,6 @@ local function serializeCharacter(char)
 		Transparency  = char.Transparency,
 		Shape         = char.Shape.Name,
 	}
-
 	local mesh = char:FindFirstChildOfClass("SpecialMesh")
 	if mesh then
 		data.MeshId    = mesh.MeshId
@@ -241,29 +235,24 @@ local function serializeCharacter(char)
 		data.MeshScale = {mesh.Scale.X, mesh.Scale.Y, mesh.Scale.Z}
 		data.MeshType  = mesh.MeshType.Name
 	end
-
 	local decals = {}
 	for _, d in pairs(char:GetChildren()) do
 		if d:IsA("Decal") or d:IsA("Texture") then
-			table.insert(decals, {
-				ClassName = d.ClassName,
-				Face      = d.Face.Name,
-				Texture   = d.Texture,
-			})
+			table.insert(decals, {ClassName=d.ClassName, Face=d.Face.Name, Texture=d.Texture})
 		end
 	end
 	if #decals > 0 then data.Decals = decals end
-
 	return data
 end
 
+-- collect all player data for saving
 
-local function collectPlayerData(player)
+local function collect_player_data(player)
 	local data = {
 		Version    = 4,
 		Coins      = 0,
 		Rebirths   = 0,
-		TimePlayed = getTotalTimePlayed(player),
+		TimePlayed = get_total_time_played(player),
 
 		SlotCharacters       = {},
 		SlotPositions        = {},
@@ -287,239 +276,208 @@ local function collectPlayerData(player)
 		IndexLuck      = player:GetAttribute("IndexLuck") or 0,
 		IndexCollected = {},
 	}
-
-	for _, animeName in ipairs(INDEX_ANIME_NAMES) do
-		if player:GetAttribute("IndexCollected_" .. animeName) == true then
-			table.insert(data.IndexCollected, animeName)
+	for _, anime in ipairs(INDEX_ANIME_NAMES) do
+		if player:GetAttribute("IndexCollected_" .. anime) == true then
+			table.insert(data.IndexCollected, anime)
 		end
 	end
-
-	local vipColor = player:GetAttribute("VIPNameColor")
-	if vipColor and typeof(vipColor) == "Color3" then
-		data.VIPNameColor = {vipColor.R, vipColor.G, vipColor.B}
+	local vip_color = player:GetAttribute("VIPNameColor")
+	if vip_color and typeof(vip_color) == "Color3" then
+		data.VIPNameColor = {vip_color.R, vip_color.G, vip_color.B}
 	end
-
-	local leaderstats = player:FindFirstChild("leaderstats")
-	if leaderstats then
-		local coins    = leaderstats:FindFirstChild("Coins")
-		local rebirths = leaderstats:FindFirstChild("Rebirths")
+	local ls = player:FindFirstChild("leaderstats")
+	if ls then
+		local coins    = ls:FindFirstChild("Coins")
+		local rebirths = ls:FindFirstChild("Rebirths")
 		if coins    then data.Coins    = coins.Value    end
 		if rebirths then data.Rebirths = rebirths.Value end
 	end
-
-	local basePlateau = getPlayerBasePlateau(player)
-	if basePlateau then
-		for _, slot in pairs(basePlateau:GetChildren()) do
+	local bp = get_base_plateau(player)
+	if bp then
+		for _, slot in pairs(bp:GetChildren()) do
 			if slot:IsA("BasePart") and slot.Name:match("^Slot%d+$") then
-				local slotNum = tonumber(slot.Name:match("%d+"))
-				local relPos  = slot.Position - basePlateau.Position
-				data.SlotPositions[tostring(slotNum)] = {relPos.X, relPos.Y, relPos.Z}
-
+				local num     = tonumber(slot.Name:match("%d+"))
+				local rel_pos = slot.Position - bp.Position
+				data.SlotPositions[tostring(num)] = {rel_pos.X, rel_pos.Y, rel_pos.Z}
 				for _, child in pairs(slot:GetChildren()) do
 					if child.Name == "PlacedCharacter" and child:IsA("BasePart") then
-						data.SlotCharacters[tostring(slotNum)] = serializeCharacter(child)
+						data.SlotCharacters[tostring(num)] = serialize_character(child)
 					end
 				end
 			end
 		end
 	end
-
-	local inventory = player:FindFirstChild("Inventory")
-	if inventory then
-		local storage = inventory:FindFirstChild("Storage")
-		if storage then
-			for _, child in pairs(storage:GetChildren()) do
+	local inv = player:FindFirstChild("Inventory")
+	if inv then
+		local stor = inv:FindFirstChild("Storage")
+		if stor then
+			for _, child in pairs(stor:GetChildren()) do
 				if child:IsA("BasePart") then
-					table.insert(data.StorageCharacters, serializeCharacter(child))
+					table.insert(data.StorageCharacters, serialize_character(child))
 				end
 			end
 		end
 	end
-
-	local discoveredFolder = player:FindFirstChild("DiscoveredCharacters")
-	if discoveredFolder then
-		for _, child in pairs(discoveredFolder:GetChildren()) do
+	local discovered = player:FindFirstChild("DiscoveredCharacters")
+	if discovered then
+		for _, child in pairs(discovered:GetChildren()) do
 			table.insert(data.DiscoveredCharacters, child.Name)
 		end
 	end
-
-	local seenFolder = player:FindFirstChild("SeenCharacters")
-	if seenFolder then
-		for _, child in pairs(seenFolder:GetChildren()) do
+	local seen = player:FindFirstChild("SeenCharacters")
+	if seen then
+		for _, child in pairs(seen:GetChildren()) do
 			table.insert(data.SeenCharacters, child.Name)
 		end
 	end
-
-	if basePlateau then
-		local pedestal = basePlateau:FindFirstChild("ShowcasePedestal")
+	if bp then
+		local pedestal = bp:FindFirstChild("ShowcasePedestal")
 		if pedestal then
 			for _, child in pairs(pedestal:GetChildren()) do
 				if child:IsA("BasePart") and child.Name == "ShowcaseCharacter" then
-					data.ShowcaseCharacter = serializeCharacter(child)
+					data.ShowcaseCharacter = serialize_character(child)
 				end
 			end
 		end
 	end
-
 	return data
 end
 
+-- save player data
 
-local function savePlayerData(player)
-	local data = collectPlayerData(player)
+local function save_player_data(player)
+	local data = collect_player_data(player)
 	local key  = "Player_" .. player.UserId
-
-	-- roll the session timer forward so the next interval starts fresh
-	local currentSessionMinutes = getSessionMinutes(player)
+	local session_mins = get_session_minutes(player)
 	player:SetAttribute("TimePlayedMinutes",
-		(player:GetAttribute("TimePlayedMinutes") or 0) + currentSessionMinutes)
-	sessionStartTimes[player.UserId] = os.time()
-
-	local success, err = pcall(function()
-		dataStore:SetAsync(key, data)
+		(player:GetAttribute("TimePlayedMinutes") or 0) + session_mins)
+	session_start_times[player.UserId] = os.time()
+	local ok, err = pcall(function()
+		data_store:SetAsync(key, data)
 	end)
-
-	if success then
+	if ok then
 		print("[DataStore] Saved " .. player.Name
-			.. " | time: "      .. formatTimePlayed(data.TimePlayed)
+			.. " | time: "      .. format_time_played(data.TimePlayed)
 			.. " | vip: "       .. tostring(data.IsVIP)
 			.. " | indexLuck: " .. data.IndexLuck)
 	else
 		warn("[DataStore] Failed to save " .. player.Name .. ": " .. tostring(err))
 	end
-
-	return success
+	return ok
 end
 
+-- load player data
 
-local function loadPlayerData(player)
+local function load_player_data(player)
 	local key  = "Player_" .. player.UserId
 	local data = nil
-
-	local success, err = pcall(function()
-		data = dataStore:GetAsync(key)
+	local ok, err = pcall(function()
+		data = data_store:GetAsync(key)
 	end)
-	if not success then
+	if not ok then
 		warn("[DataStore] Failed to load data for " .. player.Name .. ": " .. tostring(err))
 	end
-
-	-- No v9 data found, try migrating from v8
 	if not data then
-		local oldSuccess, _ = pcall(function()
-			data = oldDataStore:GetAsync(key)
+		local old_ok, _ = pcall(function()
+			data = old_data_store:GetAsync(key)
 		end)
-
-		if oldSuccess and data then
+		if old_ok and data then
 			print("[DataStore] Migrating " .. player.Name .. " from v8 to v9")
-
 			if data.SlotCharacters then
-				for slotNum, charData in pairs(data.SlotCharacters) do
-					data.SlotCharacters[slotNum] = migrateCharData(charData)
+				for k, cd in pairs(data.SlotCharacters) do
+					data.SlotCharacters[k] = migrate_char_data(cd)
 				end
 			end
 			if data.StorageCharacters then
-				for i, charData in ipairs(data.StorageCharacters) do
-					data.StorageCharacters[i] = migrateCharData(charData)
+				for i, cd in ipairs(data.StorageCharacters) do
+					data.StorageCharacters[i] = migrate_char_data(cd)
 				end
 			end
-
 			if not data.TimePlayed then data.TimePlayed = 0 end
 			data.Version = 4
-
-			pcall(function() dataStore:SetAsync(key, data) end)
+			pcall(function() data_store:SetAsync(key, data) end)
 			print("[DataStore] Migration done for " .. player.Name)
 		end
 	end
-
-	-- handle saves older than version 4
 	if data and (not data.Version or data.Version < 4) then
 		if data.SlotCharacters then
-			for slotNum, charData in pairs(data.SlotCharacters) do
-				data.SlotCharacters[slotNum] = migrateCharData(charData)
+			for k, cd in pairs(data.SlotCharacters) do
+				data.SlotCharacters[k] = migrate_char_data(cd)
 			end
 		end
 		if data.StorageCharacters then
-			for i, charData in ipairs(data.StorageCharacters) do
-				data.StorageCharacters[i] = migrateCharData(charData)
+			for i, cd in ipairs(data.StorageCharacters) do
+				data.StorageCharacters[i] = migrate_char_data(cd)
 			end
 		end
 		if not data.TimePlayed then data.TimePlayed = 0 end
 		data.Version = 4
 	end
-
 	if data and not data.TimePlayed then data.TimePlayed = 0 end
-
 	return data
 end
 
+-- spawn a character from saved data
 
-local function spawnCharacterFromData(charData, parent, position)
-	charData = migrateCharData(charData)
+local ANIME_COLORS_DS = {
+	["Solo Leveling"]    = Color3.fromRGB(108, 59,  245),
+	["Black Clover"]     = Color3.fromRGB(26,  188, 156),
+	["Hunter x Hunter"]  = Color3.fromRGB(76,  175, 80),
+	["Bleach"]           = Color3.fromRGB(245, 166, 35),
+	["My Hero Academia"] = Color3.fromRGB(46,  204, 113),
+	["Attack on Titan"]  = Color3.fromRGB(107, 142, 35),
+	["Dragon Ball"]      = Color3.fromRGB(255, 140, 0),
+	["Naruto"]           = Color3.fromRGB(255, 107, 53),
+	["One Piece"]        = Color3.fromRGB(231, 76,  60),
+}
 
+local function spawn_character_from_data(cd, parent, position)
+	cd = migrate_char_data(cd)
 	local char      = Instance.new("Part")
 	char.Name       = "PlacedCharacter"
 	char.Anchored   = true
 	char.CanCollide = false
-
-	char.Size = charData.Size
-		and Vector3.new(charData.Size[1], charData.Size[2], charData.Size[3])
-		or  Vector3.new(3, 3, 3)
-
-	if charData.Color then
-		char.Color = Color3.new(charData.Color[1], charData.Color[2], charData.Color[3])
-	end
-	if charData.Material then
-		pcall(function() char.Material = Enum.Material[charData.Material] end)
-	end
-	if charData.Transparency then char.Transparency = charData.Transparency end
-	if charData.Shape then
-		pcall(function() char.Shape = Enum.PartType[charData.Shape] end)
-	end
-
-	if charData.MeshId and charData.MeshId ~= "" then
+	char.Size = cd.Size and Vector3.new(cd.Size[1], cd.Size[2], cd.Size[3]) or Vector3.new(3, 3, 3)
+	if cd.Color       then char.Color = Color3.new(cd.Color[1], cd.Color[2], cd.Color[3]) end
+	if cd.Material    then pcall(function() char.Material = Enum.Material[cd.Material]  end) end
+	if cd.Transparency then char.Transparency = cd.Transparency end
+	if cd.Shape       then pcall(function() char.Shape    = Enum.PartType[cd.Shape]      end) end
+	if cd.MeshId and cd.MeshId ~= "" then
 		local mesh  = Instance.new("SpecialMesh")
-		mesh.MeshId = charData.MeshId
-		if charData.TextureId then mesh.TextureId = charData.TextureId end
-		if charData.MeshScale then
-			mesh.Scale = Vector3.new(charData.MeshScale[1], charData.MeshScale[2], charData.MeshScale[3])
-		end
-		if charData.MeshType then
-			pcall(function() mesh.MeshType = Enum.MeshType[charData.MeshType] end)
-		end
+		mesh.MeshId = cd.MeshId
+		if cd.TextureId then mesh.TextureId = cd.TextureId end
+		if cd.MeshScale then mesh.Scale = Vector3.new(cd.MeshScale[1], cd.MeshScale[2], cd.MeshScale[3]) end
+		if cd.MeshType  then pcall(function() mesh.MeshType = Enum.MeshType[cd.MeshType] end) end
 		mesh.Parent = char
 	end
-
-	if charData.Decals then
-		for _, decalData in pairs(charData.Decals) do
-			local decal   = Instance.new(decalData.ClassName)
-			pcall(function() decal.Face = Enum.NormalId[decalData.Face] end)
-			decal.Texture = decalData.Texture
+	if cd.Decals then
+		for _, d in pairs(cd.Decals) do
+			local decal   = Instance.new(d.ClassName)
+			pcall(function() decal.Face = Enum.NormalId[d.Face] end)
+			decal.Texture = d.Texture
 			decal.Parent  = char
 		end
 	end
-
-	local stars        = charData.Stars or 1
-	local starMult     = getStarMultiplier(stars)
-	local baseIncome   = charData.PassiveIncome or 1
-	local actualIncome = baseIncome * starMult
-
-	char:SetAttribute("CharacterName",     charData.CharacterName)
-	char:SetAttribute("Rarity",            charData.Rarity)
-	char:SetAttribute("BasePassiveIncome", baseIncome)
-	char:SetAttribute("PassiveIncome",     actualIncome)
-	char:SetAttribute("Price",             charData.Price)
-	char:SetAttribute("Anime",             charData.Anime or "Unknown")
+	local stars        = cd.Stars or 1
+	local star_mult    = get_star_multiplier(stars)
+	local base_income  = cd.PassiveIncome or 1
+	local actual_income = base_income * star_mult
+	char:SetAttribute("CharacterName",     cd.CharacterName)
+	char:SetAttribute("Rarity",            cd.Rarity)
+	char:SetAttribute("BasePassiveIncome", base_income)
+	char:SetAttribute("PassiveIncome",     actual_income)
+	char:SetAttribute("Price",             cd.Price)
+	char:SetAttribute("Anime",             cd.Anime or "Unknown")
 	char:SetAttribute("Stars",             stars)
-	char:SetAttribute("IsLocked",          charData.IsLocked)
-	char:SetAttribute("IsProtected",       charData.IsProtected == true)
+	char:SetAttribute("IsLocked",          cd.IsLocked)
+	char:SetAttribute("IsProtected",       cd.IsProtected == true)
 	char:SetAttribute("InInventory",       parent.Name == "Storage")
-
 	if position then char.Position = position end
 
-	-- name tag shown above the character in game
-	local rarityColor   = RARITY_COLORS[charData.Rarity] or Color3.fromRGB(180, 180, 180)
-	local rarityDisplay = RARITY_DISPLAY[charData.Rarity] or "Common"
-	local rd = rarityDisplay == "Ultra-Legendary" and "Ultra-L." or rarityDisplay
+	-- nametag
+	local rarity_color   = RARITY_COLORS[cd.Rarity] or Color3.fromRGB(180, 180, 180)
+	local rarity_display = RARITY_DISPLAY[cd.Rarity] or "Common"
+	local rd = rarity_display == "Ultra-Legendary" and "Ultra-L." or rarity_display
 
 	local bbg          = Instance.new("BillboardGui")
 	bbg.Name           = "NameTag"
@@ -539,7 +497,7 @@ local function spawnCharacterFromData(charData, parent, position)
 	Instance.new("UICorner", card).CornerRadius = UDim.new(0, 10)
 
 	local stroke        = Instance.new("UIStroke", card)
-	stroke.Color        = rarityColor
+	stroke.Color        = rarity_color
 	stroke.Thickness    = 1.8
 	stroke.Transparency = 0.15
 
@@ -552,121 +510,104 @@ local function spawnCharacterFromData(charData, parent, position)
 	local pill                  = Instance.new("Frame", card)
 	pill.Size                   = UDim2.new(0, 0, 0, 17)
 	pill.AutomaticSize          = Enum.AutomaticSize.X
-	pill.BackgroundColor3       = rarityColor
+	pill.BackgroundColor3       = rarity_color
 	pill.BackgroundTransparency = 0.3
 	pill.BorderSizePixel        = 0
 	Instance.new("UICorner", pill).CornerRadius = UDim.new(1, 0)
 
-	local pillPad        = Instance.new("UIPadding", pill)
-	pillPad.PaddingLeft  = UDim.new(0, 6)
-	pillPad.PaddingRight = UDim.new(0, 6)
+	local pill_pad        = Instance.new("UIPadding", pill)
+	pill_pad.PaddingLeft  = UDim.new(0, 6)
+	pill_pad.PaddingRight = UDim.new(0, 6)
 
-	local pillText                  = Instance.new("TextLabel", pill)
-	pillText.Size                   = UDim2.new(0, 0, 1, 0)
-	pillText.AutomaticSize          = Enum.AutomaticSize.X
-	pillText.BackgroundTransparency = 1
-	pillText.Text                   = rd
-	pillText.Font                   = Enum.Font.GothamBold
-	pillText.TextSize               = 10
-	pillText.TextColor3             = Color3.fromRGB(255, 255, 255)
-	pillText.TextStrokeTransparency = 0.4
+	local pill_text                  = Instance.new("TextLabel", pill)
+	pill_text.Size                   = UDim2.new(0, 0, 1, 0)
+	pill_text.AutomaticSize          = Enum.AutomaticSize.X
+	pill_text.BackgroundTransparency = 1
+	pill_text.Text                   = rd
+	pill_text.Font                   = Enum.Font.GothamBold
+	pill_text.TextSize               = 10
+	pill_text.TextColor3             = Color3.fromRGB(255, 255, 255)
+	pill_text.TextStrokeTransparency = 0.4
 
 	if stars > 1 then
-		local starColors = {
+		local star_colors = {
 			[2] = Color3.fromRGB(220, 220, 220),
 			[3] = Color3.fromRGB(255, 215, 0),
 			[4] = Color3.fromRGB(255, 140, 0),
 			[5] = Color3.fromRGB(255, 50,  50),
 		}
-		local starColor = starColors[math.min(stars, 5)] or Color3.fromRGB(255, 215, 0)
-		local starSize  = 8 + (stars - 1)
-
-		local starLabel                  = Instance.new("TextLabel", pill)
-		starLabel.Size                   = UDim2.new(0, 0, 1, 0)
-		starLabel.AutomaticSize          = Enum.AutomaticSize.X
-		starLabel.Position               = UDim2.new(1, 2, 0, 0)
-		starLabel.BackgroundTransparency = 1
-		starLabel.Text                   = " " .. string.rep("*", stars)
-		starLabel.Font                   = Enum.Font.GothamBold
-		starLabel.TextSize               = starSize
-		starLabel.TextColor3             = starColor
+		local star_color = star_colors[math.min(stars, 5)] or Color3.fromRGB(255, 215, 0)
+		local star_size  = 8 + (stars - 1)
+		local star_label                  = Instance.new("TextLabel", pill)
+		star_label.Size                   = UDim2.new(0, 0, 1, 0)
+		star_label.AutomaticSize          = Enum.AutomaticSize.X
+		star_label.Position               = UDim2.new(1, 2, 0, 0)
+		star_label.BackgroundTransparency = 1
+		star_label.Text                   = " " .. string.rep("*", stars)
+		star_label.Font                   = Enum.Font.GothamBold
+		star_label.TextSize               = star_size
+		star_label.TextColor3             = star_color
 	end
 
-	local nameL                  = Instance.new("TextLabel", card)
-	nameL.Size                   = UDim2.new(1, 0, 0, 24)
-	nameL.Position               = UDim2.new(0, 0, 0, 20)
-	nameL.BackgroundTransparency = 1
-	nameL.Text                   = charData.CharacterName
-	nameL.Font                   = Enum.Font.GothamBold
-	nameL.TextSize               = 17
-	nameL.TextScaled             = false
-	nameL.TextColor3             = Color3.fromRGB(240, 240, 245)
-	nameL.TextStrokeTransparency = 0.5
-	nameL.TextXAlignment         = Enum.TextXAlignment.Left
+	local name_l                  = Instance.new("TextLabel", card)
+	name_l.Size                   = UDim2.new(1, 0, 0, 24)
+	name_l.Position               = UDim2.new(0, 0, 0, 20)
+	name_l.BackgroundTransparency = 1
+	name_l.Text                   = cd.CharacterName
+	name_l.Font                   = Enum.Font.GothamBold
+	name_l.TextSize               = 17
+	name_l.TextScaled             = false
+	name_l.TextColor3             = Color3.fromRGB(240, 240, 245)
+	name_l.TextStrokeTransparency = 0.5
+	name_l.TextXAlignment         = Enum.TextXAlignment.Left
 
-	local ANIME_COLORS_DS = {
-		["Solo Leveling"]    = Color3.fromRGB(108, 59,  245),
-		["Black Clover"]     = Color3.fromRGB(26,  188, 156),
-		["Hunter x Hunter"]  = Color3.fromRGB(76,  175, 80),
-		["Bleach"]           = Color3.fromRGB(245, 166, 35),
-		["My Hero Academia"] = Color3.fromRGB(46,  204, 113),
-		["Attack on Titan"]  = Color3.fromRGB(107, 142, 35),
-		["Dragon Ball"]      = Color3.fromRGB(255, 140, 0),
-		["Naruto"]           = Color3.fromRGB(255, 107, 53),
-		["One Piece"]        = Color3.fromRGB(231, 76,  60),
-	}
-
-	local animeL                  = Instance.new("TextLabel", card)
-	animeL.Size                   = UDim2.new(1, 0, 0, 13)
-	animeL.Position               = UDim2.new(0, 0, 0, 46)
-	animeL.BackgroundTransparency = 1
-	animeL.Text                   = charData.Anime or ""
-	animeL.Font                   = Enum.Font.Gotham
-	animeL.TextSize               = 13
-	animeL.TextColor3             = ANIME_COLORS_DS[charData.Anime or ""] or Color3.fromRGB(160, 160, 190)
-	animeL.TextStrokeTransparency = 0.5
-	animeL.TextXAlignment         = Enum.TextXAlignment.Left
+	local anime_l                  = Instance.new("TextLabel", card)
+	anime_l.Size                   = UDim2.new(1, 0, 0, 13)
+	anime_l.Position               = UDim2.new(0, 0, 0, 46)
+	anime_l.BackgroundTransparency = 1
+	anime_l.Text                   = cd.Anime or ""
+	anime_l.Font                   = Enum.Font.Gotham
+	anime_l.TextSize               = 13
+	anime_l.TextColor3             = ANIME_COLORS_DS[cd.Anime or ""] or Color3.fromRGB(160, 160, 190)
+	anime_l.TextStrokeTransparency = 0.5
+	anime_l.TextXAlignment         = Enum.TextXAlignment.Left
 
 	local sep                  = Instance.new("Frame", card)
 	sep.Size                   = UDim2.new(1, 0, 0, 1)
 	sep.Position               = UDim2.new(0, 0, 0, 62)
-	sep.BackgroundColor3       = rarityColor
+	sep.BackgroundColor3       = rarity_color
 	sep.BackgroundTransparency = 0.65
 	sep.BorderSizePixel        = 0
 
-	local incText = "+" .. formatNumber(actualIncome) .. "/s"
-	if stars > 1 then
-		incText = incText .. " (x" .. string.format("%.1f", starMult) .. ")"
-	end
+	local inc_text = "+" .. formatNumber(actual_income) .. "/s"
+	if stars > 1 then inc_text = inc_text .. " (x" .. string.format("%.1f", star_mult) .. ")" end
 
-	local incL                  = Instance.new("TextLabel", card)
-	incL.Size                   = UDim2.new(1, 0, 0, 16)
-	incL.Position               = UDim2.new(0, 0, 0, 67)
-	incL.BackgroundTransparency = 1
-	incL.Text                   = incText
-	incL.Font                   = Enum.Font.GothamBold
-	incL.TextSize               = 12
-	incL.TextColor3             = Color3.fromRGB(100, 255, 120)
-	incL.TextStrokeTransparency = 0.4
-	incL.TextXAlignment         = Enum.TextXAlignment.Left
+	local inc_l                  = Instance.new("TextLabel", card)
+	inc_l.Size                   = UDim2.new(1, 0, 0, 16)
+	inc_l.Position               = UDim2.new(0, 0, 0, 67)
+	inc_l.BackgroundTransparency = 1
+	inc_l.Text                   = inc_text
+	inc_l.Font                   = Enum.Font.GothamBold
+	inc_l.TextSize               = 12
+	inc_l.TextColor3             = Color3.fromRGB(100, 255, 120)
+	inc_l.TextStrokeTransparency = 0.4
+	inc_l.TextXAlignment         = Enum.TextXAlignment.Left
 
-	-- highlight effect based on rarity
-	local rarityHighlights = {
+	local rarity_highlights = {
 		Secret    = {fill=Color3.fromRGB(255,255,0),   fillT=0.3, outline=Color3.fromRGB(255,0,0),    outlineT=0},
 		Celestial = {fill=Color3.fromRGB(255,255,100), fillT=0.5, outline=Color3.fromRGB(255,200,0),  outlineT=0.2},
 		Ascendent = {fill=Color3.fromRGB(255,255,255), fillT=0.6, outline=Color3.fromRGB(200,200,255),outlineT=0.3},
 		Mythic    = {fill=Color3.fromRGB(255,0,100),   fillT=0.7, outline=Color3.fromRGB(255,50,150), outlineT=0.4},
 	}
-	local hl = rarityHighlights[charData.Rarity]
+	local hl = rarity_highlights[cd.Rarity]
 	if hl then
-		local h             = Instance.new("Highlight")
-		h.FillColor         = hl.fill
-		h.FillTransparency  = hl.fillT
-		h.OutlineColor      = hl.outline
+		local h               = Instance.new("Highlight")
+		h.FillColor           = hl.fill
+		h.FillTransparency    = hl.fillT
+		h.OutlineColor        = hl.outline
 		h.OutlineTransparency = hl.outlineT
-		h.Parent            = char
+		h.Parent              = char
 	end
-
 	if stars >= 4 then
 		local glow      = Instance.new("PointLight")
 		glow.Name       = "StarGlow"
@@ -675,37 +616,29 @@ local function spawnCharacterFromData(charData, parent, position)
 		glow.Range      = 6 + stars
 		glow.Parent     = char
 	end
-
 	char.Parent = parent
 	return char
 end
 
+-- restore a player from saved data
 
-local function restorePlayer(player, data)
+local function restore_player(player, data)
 	if not data then return end
-
-	local leaderstats = player:WaitForChild("leaderstats", 10)
-	if not leaderstats then return end
-
-	local coins = leaderstats:FindFirstChild("Coins")
-	if coins and data.Coins and data.Coins > 0 then
-		coins.Value = data.Coins
-	end
-
-	local rebirths = leaderstats:FindFirstChild("Rebirths")
+	local ls = player:WaitForChild("leaderstats", 10)
+	if not ls then return end
+	local coins = ls:FindFirstChild("Coins")
+	if coins and data.Coins and data.Coins > 0 then coins.Value = data.Coins end
+	local rebirths = ls:FindFirstChild("Rebirths")
 	if rebirths and data.Rebirths then
 		rebirths.Value = data.Rebirths
-		player:SetAttribute("CashMultiplier",  getCashMultiplier(data.Rebirths))
+		player:SetAttribute("CashMultiplier",  get_cash_multiplier(data.Rebirths))
 		player:SetAttribute("StorageCapacity", STORAGE_PER_REBIRTH[data.Rebirths] or 4)
 		player:SetAttribute("SlotCount",       SLOTS_PER_REBIRTH[data.Rebirths]   or 5)
 	end
-
 	player:SetAttribute("TimePlayedMinutes", data.TimePlayed or 0)
-
 	if data.SelectedBaseTheme ~= nil then
 		player:SetAttribute("SelectedBaseTheme", data.SelectedBaseTheme)
 	end
-
 	if data.IsVIP then
 		player:SetAttribute("IsVIP", true)
 		if data.VIPNameColor then
@@ -715,121 +648,100 @@ local function restorePlayer(player, data)
 			player:SetAttribute("VIPNameColor", Color3.fromRGB(255, 215, 0))
 		end
 	end
-
-	local bpPerks = {
+	local bp_perks = {
 		"HasBP_x2Luck", "HasBP_x2Coins", "HasBP_x2Speed",
 		"HasBP_ExtraSlots", "HasBP_RebirthSave", "HasBP_SaveAll", "HasPremiumSlapTool",
 	}
-	for _, perk in ipairs(bpPerks) do
+	for _, perk in ipairs(bp_perks) do
 		if data[perk] then player:SetAttribute(perk, true) end
 	end
-
-	if data.IndexLuck then
-		player:SetAttribute("IndexLuck", data.IndexLuck)
-	end
+	if data.IndexLuck then player:SetAttribute("IndexLuck", data.IndexLuck) end
 	if data.IndexCollected then
-		for _, animeName in ipairs(data.IndexCollected) do
-			player:SetAttribute("IndexCollected_" .. animeName, true)
+		for _, anime in ipairs(data.IndexCollected) do
+			player:SetAttribute("IndexCollected_" .. anime, true)
 		end
 	end
-
-	-- apply plateau color after the base has had time to load
 	task.delay(2, function()
-		local bp = getPlayerBasePlateau(player)
+		local bp = get_base_plateau(player)
 		if bp then
-			local colorLevel = player:GetAttribute("SelectedBaseTheme") or (data.Rebirths or 0)
-			bp.Color    = ANIME_BASE_COLORS[colorLevel] or Color3.fromRGB(108, 59, 245)
+			local color_level = player:GetAttribute("SelectedBaseTheme") or (data.Rebirths or 0)
+			bp.Color    = ANIME_BASE_COLORS[color_level] or Color3.fromRGB(108, 59, 245)
 			bp.Material = Enum.Material.SmoothPlastic
 		end
 	end)
-
 	task.wait(0.5)
-
-	local basePlateau = getPlayerBasePlateau(player)
-	if not basePlateau then
+	local bp = get_base_plateau(player)
+	if not bp then
 		warn("[DataStore] BasePlateau not found for " .. player.Name)
 		return
 	end
-
-	local _, storage, invCount = ensureInventory(player)
-
+	local _, stor, ic = ensure_inventory(player)
 	if data.SlotPositions then
-		for slotNumStr, relPosData in pairs(data.SlotPositions) do
-			local slot = basePlateau:FindFirstChild("Slot" .. tonumber(slotNumStr))
+		for k, rel in pairs(data.SlotPositions) do
+			local slot = bp:FindFirstChild("Slot" .. tonumber(k))
 			if slot and slot:IsA("BasePart") then
-				slot.Position = basePlateau.Position
-					+ Vector3.new(relPosData[1], relPosData[2], relPosData[3])
+				slot.Position = bp.Position + Vector3.new(rel[1], rel[2], rel[3])
 			end
 		end
 	end
-
 	if data.SlotCharacters then
-		for slotNumStr, charData in pairs(data.SlotCharacters) do
-			local slot = basePlateau:FindFirstChild("Slot" .. tonumber(slotNumStr))
+		for k, cd in pairs(data.SlotCharacters) do
+			local slot = bp:FindFirstChild("Slot" .. tonumber(k))
 			if slot then
 				for _, child in pairs(slot:GetChildren()) do
 					if child.Name == "PlacedCharacter" then child:Destroy() end
 				end
-				local restored = spawnCharacterFromData(charData, slot, slot.Position + Vector3.new(0, 2, 0))
+				local restored = spawn_character_from_data(cd, slot, slot.Position + Vector3.new(0, 2, 0))
 				slot:SetAttribute("Occupied", true)
-				if restored then discoverCharacter(player, charData.CharacterName) end
+				if restored then discover_character(player, cd.CharacterName) end
 			end
 		end
 	end
-
 	if data.StorageCharacters and #data.StorageCharacters > 0 then
-		for _, charData in pairs(data.StorageCharacters) do
-			local char = spawnCharacterFromData(charData, storage, Vector3.new(0, -200, 0))
+		for _, cd in pairs(data.StorageCharacters) do
+			local char = spawn_character_from_data(cd, stor, Vector3.new(0, -200, 0))
 			if char then
-				invCount.Value = invCount.Value + 1
-				discoverCharacter(player, charData.CharacterName)
+				ic.Value = ic.Value + 1
+				discover_character(player, cd.CharacterName)
 			end
 		end
 	end
-
 	if data.DiscoveredCharacters then
-		for _, charName in pairs(data.DiscoveredCharacters) do
-			discoverCharacter(player, charName)
+		for _, char_name in pairs(data.DiscoveredCharacters) do
+			discover_character(player, char_name)
 		end
 	end
-
 	if data.SeenCharacters then
-		local seenFolder = player:FindFirstChild("SeenCharacters")
-		if not seenFolder then
-			seenFolder        = Instance.new("Folder")
-			seenFolder.Name   = "SeenCharacters"
-			seenFolder.Parent = player
+		local seen = player:FindFirstChild("SeenCharacters")
+		if not seen then
+			seen        = Instance.new("Folder")
+			seen.Name   = "SeenCharacters"
+			seen.Parent = player
 		end
-		for _, charName in pairs(data.SeenCharacters) do
-			if not seenFolder:FindFirstChild(charName) then
+		for _, char_name in pairs(data.SeenCharacters) do
+			if not seen:FindFirstChild(char_name) then
 				local tag     = Instance.new("BoolValue")
-				tag.Name      = charName
+				tag.Name      = char_name
 				tag.Value     = true
-				tag.Parent    = seenFolder
+				tag.Parent    = seen
 			end
 		end
 	end
-
 	if data.ShowcaseCharacter then
 		task.delay(3, function()
-			local bp = getPlayerBasePlateau(player)
-			if not bp then return end
-			local pedestal = bp:FindFirstChild("ShowcasePedestal")
+			local b2 = get_base_plateau(player)
+			if not b2 then return end
+			local pedestal = b2:FindFirstChild("ShowcasePedestal")
 			if not pedestal then return end
-
 			for _, child in pairs(pedestal:GetChildren()) do
-				if child:IsA("BasePart") and child.Name == "ShowcaseCharacter" then
-					child:Destroy()
-				end
+				if child:IsA("BasePart") and child.Name == "ShowcaseCharacter" then child:Destroy() end
 			end
-
-			local charData = migrateCharData(data.ShowcaseCharacter)
-			local char     = spawnCharacterFromData(charData, pedestal, pedestal.Position + Vector3.new(0, 3, 0))
+			local cd   = migrate_char_data(data.ShowcaseCharacter)
+			local char = spawn_character_from_data(cd, pedestal, pedestal.Position + Vector3.new(0, 3, 0))
 			if char then
 				char.Name = "ShowcaseCharacter"
 				char:SetAttribute("IsShowcase",  true)
 				char:SetAttribute("InInventory", false)
-
 				local h               = Instance.new("Highlight")
 				h.Name                = "ShowcaseGlow"
 				h.FillColor           = Color3.fromRGB(0, 255, 200)
@@ -840,26 +752,24 @@ local function restorePlayer(player, data)
 			end
 		end)
 	end
-
-	local collectedCount = data.IndexCollected and #data.IndexCollected or 0
+	local collected = data.IndexCollected and #data.IndexCollected or 0
 	print("[DataStore] Restored " .. player.Name
 		.. " | coins: "      .. formatNumber(data.Coins or 0)
 		.. " | rebirths: "   .. (data.Rebirths or 0)
-		.. " | multiplier: " .. getCashMultiplier(data.Rebirths or 0) .. "x"
+		.. " | multiplier: " .. get_cash_multiplier(data.Rebirths or 0) .. "x"
 		.. " | vip: "        .. tostring(data.IsVIP or false)
 		.. " | indexLuck: "  .. (data.IndexLuck or 0)
-		.. " (" .. collectedCount .. " collected)"
-		.. " | time: "       .. formatTimePlayed(data.TimePlayed or 0))
+		.. " (" .. collected .. " collected)"
+		.. " | time: "       .. format_time_played(data.TimePlayed or 0))
 end
 
+-- player added
 
 Players.PlayerAdded:Connect(function(player)
-	sessionStartTimes[player.UserId] = os.time()
+	session_start_times[player.UserId] = os.time()
 	task.wait(0.5)
-
-	local data = loadPlayerData(player)
-
-	local hasData = data and (
+	local data = load_player_data(player)
+	local has_data = data and (
 		(data.Coins or 0) > 0
 		or (data.SlotCharacters       and next(data.SlotCharacters))
 		or (data.StorageCharacters    and #data.StorageCharacters > 0)
@@ -872,68 +782,66 @@ Players.PlayerAdded:Connect(function(player)
 		or (data.IndexLuck            and data.IndexLuck > 0)
 		or (data.IndexCollected       and #data.IndexCollected > 0)
 	)
-
-	if hasData then
-		restorePlayer(player, data)
+	if has_data then
+		restore_player(player, data)
 	else
 		player:SetAttribute("TimePlayedMinutes", 0)
 		print("[DataStore] New player: " .. player.Name)
 	end
-
-	sessionData[player.UserId] = true
+	session_data[player.UserId] = true
 end)
+
+-- player removing
 
 Players.PlayerRemoving:Connect(function(player)
-	local sessionMins = getSessionMinutes(player)
+	local mins = get_session_minutes(player)
 	player:SetAttribute("TimePlayedMinutes",
-		(player:GetAttribute("TimePlayedMinutes") or 0) + sessionMins)
-	sessionStartTimes[player.UserId] = nil
-	savePlayerData(player)
-	sessionData[player.UserId] = nil
+		(player:GetAttribute("TimePlayedMinutes") or 0) + mins)
+	session_start_times[player.UserId] = nil
+	save_player_data(player)
+	session_data[player.UserId] = nil
 end)
 
+-- autosave loop
 
 task.spawn(function()
 	while true do
 		task.wait(AUTOSAVE_INTERVAL)
 		for _, player in pairs(Players:GetPlayers()) do
-			task.spawn(function() savePlayerData(player) end)
+			task.spawn(function() save_player_data(player) end)
 		end
 	end
 end)
 
 game:BindToClose(function()
 	for _, player in pairs(Players:GetPlayers()) do
-		local sessionMins = getSessionMinutes(player)
+		local mins = get_session_minutes(player)
 		player:SetAttribute("TimePlayedMinutes",
-			(player:GetAttribute("TimePlayedMinutes") or 0) + sessionMins)
-		savePlayerData(player)
+			(player:GetAttribute("TimePlayedMinutes") or 0) + mins)
+		save_player_data(player)
 	end
 end)
 
-print("[DataStore] Handler loaded")
+-- grant special character (fired by ShopHandler when a player buys directly)
 
--- grant special character is fired by ShopHandler when a player buys
--- a character directly instead of rolling for it.
-local grantSpecialChar  = Instance.new("BindableEvent")
-grantSpecialChar.Name   = "GrantSpecialCharacter"
-grantSpecialChar.Parent = game:GetService("ServerScriptService")
+local grant_special_char  = Instance.new("BindableEvent")
+grant_special_char.Name   = "GrantSpecialCharacter"
+grant_special_char.Parent = game:GetService("ServerScriptService")
 
-grantSpecialChar.Event:Connect(function(player, charData)
+grant_special_char.Event:Connect(function(player, cd)
 	if not player or not player.Parent then return end
-
-	local maxStorage    = GD.STORAGE_PER_REBIRTH[player:GetAttribute("RebirthCount") or 0] or 4
-	local _, storage, _ = ensureInventory(player)
-	if not storage then return end
-
-	if #storage:GetChildren() >= maxStorage then
+	local max_storage   = GD.STORAGE_PER_REBIRTH[player:GetAttribute("RebirthCount") or 0] or 4
+	local _, stor, _ = ensure_inventory(player)
+	if not stor then return end
+	if #stor:GetChildren() >= max_storage then
 		local ne = ReplicatedStorage:FindFirstChild("NotifyEvent")
 		if ne then ne:FireClient(player, "Storage is full! Free up space first.", "warning") end
 		return
 	end
-
-	local char = spawnCharacterFromData(charData, storage, Vector3.new(0, -500, 0))
-	char.Parent = storage
-	discoverCharacter(player, charData.CharacterName)
-	savePlayerData(player)
+	local char = spawn_character_from_data(cd, stor, Vector3.new(0, -500, 0))
+	char.Parent = stor
+	discover_character(player, cd.CharacterName)
+	save_player_data(player)
 end)
+
+print("[DataStore] handler loaded")
