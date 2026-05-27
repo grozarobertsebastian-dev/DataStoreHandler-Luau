@@ -8,11 +8,14 @@ This project was built to practice real backend logic such as data persistence, 
 
 ## Features
 
-- saves and loads player data (coins, rebirths, inventory, etc.)
-- tracks discovered characters
-- supports character attributes like price and passive income
-- basic protection against data loss between sessions
-- supports data migration between versions
+- persistent player data (coins, rebirths, time played)
+- inventory & storage system with slot-based placement
+- character serialization (attributes, mesh, decals, metadata)
+- discovered and seen character tracking
+- base/plateau reconstruction from saved state
+- data versioning and migration support (v8 → v9)
+- autosave + safe shutdown handling
+- session tracking system
 
 ---
 
