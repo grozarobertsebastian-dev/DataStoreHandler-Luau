@@ -1,6 +1,5 @@
--- DataStoreHandler (ServerScriptService)
--- Saves and loads all player data: coins, rebirths, inventory,
--- discovered characters, VIP status, battle pass perks and index progress.
+-- saves and loads - coins, rebirths, inventory,
+-- saves progress, purchases, index...
 
 local DataStoreService  = game:GetService("DataStoreService")
 local Players           = game:GetService("Players")
@@ -14,8 +13,8 @@ local AUTOSAVE_INTERVAL = 120
 local sessionData       = {}
 local sessionStartTimes = {}
 
--- Price and passive income for every character.
--- Keeping this in one place makes rebalancing easier.
+-- price and passive income for every character.
+-- keeping this in one place makes rebalancing easier.
 local ECONOMY_V3 = {
 	["Yoo Jin-Ho"]    = {Price=30,        PassiveIncome=0.2},
 	["Go Gun-Hee"]    = {Price=150,       PassiveIncome=0.6},
@@ -108,8 +107,8 @@ local ECONOMY_V3 = {
 	["Blackbeard"]                 = {Price=80000000000,   PassiveIncome=10000000},
 }
 
--- Updates price and income on a saved character to match the current economy table.
--- Needed when a player's save was created before a balance change.
+-- updates price and income on a saved character to match the current economy table.
+-- needed when a players save was created before a balance change.
 local function migrateCharData(charData)
 	if not charData or not charData.CharacterName then return charData end
 	local v3 = ECONOMY_V3[charData.CharacterName]
@@ -121,7 +120,7 @@ local function migrateCharData(charData)
 	return charData
 end
 
--- Shortcuts to shared game constants
+-- shortcuts to shared game constants
 local formatNumber        = GD.formatNumber
 local RARITY_COLORS       = GD.RARITY_COLORS
 local RARITY_DISPLAY      = GD.RARITY_DISPLAY
@@ -370,7 +369,7 @@ local function savePlayerData(player)
 	local data = collectPlayerData(player)
 	local key  = "Player_" .. player.UserId
 
-	-- Roll the session timer forward so the next interval starts fresh
+	-- roll the session timer forward so the next interval starts fresh
 	local currentSessionMinutes = getSessionMinutes(player)
 	player:SetAttribute("TimePlayedMinutes",
 		(player:GetAttribute("TimePlayedMinutes") or 0) + currentSessionMinutes)
@@ -432,7 +431,7 @@ local function loadPlayerData(player)
 		end
 	end
 
-	-- Handle saves older than version 4
+	-- handle saves older than version 4
 	if data and (not data.Version or data.Version < 4) then
 		if data.SlotCharacters then
 			for slotNum, charData in pairs(data.SlotCharacters) do
@@ -517,7 +516,7 @@ local function spawnCharacterFromData(charData, parent, position)
 
 	if position then char.Position = position end
 
-	-- Name tag shown above the character in-world
+	-- name tag shown above the character in game
 	local rarityColor   = RARITY_COLORS[charData.Rarity] or Color3.fromRGB(180, 180, 180)
 	local rarityDisplay = RARITY_DISPLAY[charData.Rarity] or "Common"
 	local rd = rarityDisplay == "Ultra-Legendary" and "Ultra-L." or rarityDisplay
@@ -651,7 +650,7 @@ local function spawnCharacterFromData(charData, parent, position)
 	incL.TextStrokeTransparency = 0.4
 	incL.TextXAlignment         = Enum.TextXAlignment.Left
 
-	-- Highlight effect based on rarity
+	-- highlight effect based on rarity
 	local rarityHighlights = {
 		Secret    = {fill=Color3.fromRGB(255,255,0),   fillT=0.3, outline=Color3.fromRGB(255,0,0),    outlineT=0},
 		Celestial = {fill=Color3.fromRGB(255,255,100), fillT=0.5, outline=Color3.fromRGB(255,200,0),  outlineT=0.2},
@@ -734,7 +733,7 @@ local function restorePlayer(player, data)
 		end
 	end
 
-	-- Apply plateau color after the base has had time to load
+	-- apply plateau color after the base has had time to load
 	task.delay(2, function()
 		local bp = getPlayerBasePlateau(player)
 		if bp then
@@ -914,7 +913,7 @@ end)
 
 print("[DataStore] Handler loaded")
 
--- GrantSpecialCharacter is fired by ShopHandler when a player buys
+-- grant special character is fired by ShopHandler when a player buys
 -- a character directly instead of rolling for it.
 local grantSpecialChar  = Instance.new("BindableEvent")
 grantSpecialChar.Name   = "GrantSpecialCharacter"
